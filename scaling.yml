@@ -63,6 +63,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/CloudWatchFullAccess
         - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
       Tags:
         - Key: Name
           Value: !Ref AWS::StackName
@@ -81,7 +82,10 @@ Resources:
               - codebuild.amazonaws.com
           Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/PowerUserAccess
+        - arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
 
   BuildProject:
     Type: AWS::CodeBuild::Project
@@ -345,18 +349,17 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         config:
-          packages:
-            yum:
-              ruby: []
-              jq: []
+          00-install-ruby:
+              command: dnf install -y ruby
+          01-install-jq:
+              command: dnf install -y jq
+          02-install-cd-agent:
+            command: "./install auto"
+            cwd: "/home/ec2-user/"
           files:
             /home/ec2-user/install:
               source: !Sub "https://aws-codedeploy-${AWS::Region}.s3.amazonaws.com/latest/install"
               mode: "000755" # executable
-          commands:
-            00-install-cd-agent:
-              command: "./install auto"
-              cwd: "/home/ec2-user/"
     Properties:
       LaunchTemplateName: !Sub 'LaunchTemplate_${AWS::StackName}'
       LaunchTemplateData:
@@ -405,8 +408,13 @@ Resources:
             # Have CloudFormation install any files and packages from the metadata
             /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --region ${AWS::Region} --resource InstanceLaunchTemplate
 
-            # Query the EC2 metadata service for this instance's instance-id
-            export INSTANCE_ID="`wget -q -O - http://169.254.169.254/latest/meta-data/instance-id`"
+            # Get IMDSv2 session token
+            TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" \
+              -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s)
+
+            # Get instance ID using token
+            INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+              http://169.254.169.254/latest/meta-data/instance-id)
 
             # Query EC2 describeTags method and pull our the CFN Logical ID for this instance
 
